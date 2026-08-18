@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(open:*)",
+      "Bash(ls /Users/robertpereira/work/projetos/smart_weighing/*.ino)",
+      "Bash(ls:*)",
+      "Bash(arduino-cli compile:*)",
+      "Bash(brew list:*)",
+      "Read(//usr/local/bin/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(brew install:*)",
+      "Bash(arduino-cli core:*)",
+      "Bash(arduino-cli lib:*)",
+      "Bash(arduino-cli upload:*)",
+      "Bash(arduino-cli monitor:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(pip3 show:*)",
+      "Bash(/usr/local/bin/python3 -c \"import serial; print\\('ok'\\)\" 2>&1)",
+      "Bash(/usr/local/opt/python@3.11/bin/python3.11 -m pip install pyserial)",
+      "Bash(/usr/local/opt/python@3.11/bin/python3.11 -c \"import serial; print\\(''''ok''''\\)\")",
+      "Bash(pkill -f \"arduino-cli monitor\")",
+      "Bash(pkill -f \"cu.usbserial\")",
+      "Bash(git branch:*)",
+      "Bash(git remote:*)",
+      "Bash(git:*)"
+    ]
+  }
+}
