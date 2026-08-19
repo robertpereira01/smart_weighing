@@ -25,8 +25,8 @@
 #define HX711_SCK  18
 
 // ─── Calibração ──────────────────────────────────────────────────────────────
-// Fator obtido experimentalmente: ~21130 RAW por kg (514g → ~10861 RAW)
-#define FATOR_RAW_POR_KG  21130.0
+// Fator obtido experimentalmente: ~18504 RAW por kg (512g → ~9474 RAW)
+#define FATOR_RAW_POR_KG  18504.0
 
 // ─── Botijão GLP ─────────────────────────────────────────────────────────────
 // P13: botijão vazio ~13 kg, carga nominal 13 kg de gás
@@ -95,6 +95,15 @@ int   janelasEstaveis     = 0;
 
 // Timestamp
 unsigned long tempoInicio = 0;
+
+// Leitura HX711 em core separado
+volatile float rawHX_pronto = 0.0;
+volatile bool  novaLeitura  = false;
+
+// Configuração do container (alterável via URL: ?cheio=XX&vazio=YY)
+float cfgPesoVazio   = PESO_BOTIJAO_VAZIO_KG;
+float cfgPesoCheio   = PESO_BOTIJAO_VAZIO_KG + CAPACIDADE_GLP_KG;
+float cfgCapacidade  = CAPACIDADE_GLP_KG;
 
 // Histórico de consumo (ring buffer)
 struct AmostraHistorico {
@@ -172,10 +181,21 @@ void resetarJanela() {
 }
 
 void calcularGLP() {
-  glpKg = pesoKg - PESO_BOTIJAO_VAZIO_KG;
+  glpKg = pesoKg - cfgPesoVazio;
   if (glpKg < 0.0) glpKg = 0.0;
-  glpPercentual = (glpKg / CAPACIDADE_GLP_KG) * 100.0;
+  glpPercentual = (glpKg / cfgCapacidade) * 100.0;
   if (glpPercentual > 100.0) glpPercentual = 100.0;
+}
+
+void aplicarParametros() {
+  if (server.hasArg("vazio")) {
+    cfgPesoVazio = server.arg("vazio").toFloat();
+  }
+  if (server.hasArg("cheio")) {
+    cfgPesoCheio = server.arg("cheio").toFloat();
+  }
+  cfgCapacidade = cfgPesoCheio - cfgPesoVazio;
+  if (cfgCapacidade < 0.01) cfgCapacidade = 0.01;
 }
 
 String tempoUptime() {
@@ -260,6 +280,7 @@ void handleHistorico() {
 }
 
 void handleRoot() {
+  aplicarParametros();
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta charset='UTF-8'>";
   html += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
@@ -280,36 +301,25 @@ void handleRoot() {
   // Cartao GLP
   html += "<div class='card'>";
   html += "<div class='label'>Gas restante</div>";
-  html += "<div class='valor'>" + String(glpKg, 1) + " kg</div>";
-
-  // Barra de progresso com cor adaptativa
-  String cor = "#0f0";
-  if (glpPercentual < 15) cor = "#f44";
-  else if (glpPercentual < 40) cor = "#fa0";
-
-  html += "<div class='barra-fundo'><div class='barra' style='width:" + String(glpPercentual, 0) + "%;background:" + cor + "'></div></div>";
-  html += "<div class='label'>" + String(glpPercentual, 0) + "%</div>";
+  html += "<div class='valor' id='glpKg'>--</div>";
+  html += "<div class='barra-fundo'><div class='barra' id='barra'></div></div>";
+  html += "<div class='label' id='glpPct'>--</div>";
   html += "</div>";
 
   // Cartao peso total
   html += "<div class='card'>";
   html += "<div class='label'>Peso total na plataforma</div>";
-  html += "<div style='font-size:2em;font-weight:bold'>" + String(pesoKg, 3) + " kg</div>";
+  html += "<div style='font-size:2em;font-weight:bold' id='pesoKg'>--</div>";
   html += "</div>";
 
   // Cartao consumo + autonomia
   html += "<div class='card'>";
   html += "<div class='label'>Consumo estimado</div>";
-  html += "<div style='font-size:2em;font-weight:bold;color:#fa0'>" + String(consumoKgH, 3) + " kg/h</div>";
+  html += "<div style='font-size:2em;font-weight:bold;color:#fa0' id='consumo'>--</div>";
   html += "<div style='margin-top:12px'></div>";
   html += "<div class='label'>Autonomia estimada</div>";
-
-  String corAutonomia = "#0f0";
-  if (autonomiaHoras >= 0 && autonomiaHoras < 24.0) corAutonomia = "#f44";
-  else if (autonomiaHoras >= 0 && autonomiaHoras < 72.0) corAutonomia = "#fa0";
-
-  html += "<div style='font-size:2em;font-weight:bold;color:" + corAutonomia + "'>" + formatarAutonomia() + "</div>";
-  html += "<div class='label'>" + String(numAmostras) + " amostras registradas</div>";
+  html += "<div style='font-size:2em;font-weight:bold' id='autonomia'>--</div>";
+  html += "<div class='label' id='amostras'>--</div>";
   html += "</div>";
 
   // Grafico historico (SVG gerado via JS com dados do /api/historico)
@@ -318,10 +328,18 @@ void handleRoot() {
   html += "<div id='grafico' style='margin-top:10px'></div>";
   html += "</div>";
 
+  // Cartao configuracao
+  html += "<div class='card'>";
+  html += "<div class='label'>Configuracao do container</div>";
+  html += "<div class='info'>Peso vazio: <b>" + String(cfgPesoVazio, 3) + " kg</b> | Peso cheio: <b>" + String(cfgPesoCheio, 3) + " kg</b></div>";
+  html += "<div class='info'>Capacidade: " + String(cfgCapacidade, 3) + " kg</div>";
+  html += "<div class='info' style='color:#666;margin-top:6px'>Alterar: ?cheio=XX&amp;vazio=YY</div>";
+  html += "</div>";
+
   // Cartao estado
   html += "<div class='card'>";
-  html += "<div class='info'>Estado: <b>" + nomeEstado(estadoAtual) + "</b></div>";
-  html += "<div class='info'>Uptime: " + tempoUptime() + "</div>";
+  html += "<div class='info'>Estado: <b id='estado'>--</b></div>";
+  html += "<div class='info'>Uptime: <span id='uptime'>--</span></div>";
   html += "<div class='info'>IP: " + WiFi.localIP().toString() + "</div>";
   html += "</div>";
 
@@ -358,8 +376,26 @@ void handleRoot() {
   html += "g.innerHTML=s});";
   html += "}";
   html += "desenhar();";
-  html += "setInterval(function(){desenhar()},10000);";  // atualiza grafico a cada 10s
-  html += "setTimeout(function(){location.reload()},30000);";  // reload completo a cada 30s
+  html += "setInterval(desenhar,10000);";
+  // Atualiza valores via AJAX a cada 2s
+  html += "function atualizar(){";
+  html += "fetch('/api'+location.search).then(r=>r.json()).then(function(d){";
+  html += "document.getElementById('glpKg').textContent=d.glpKg.toFixed(1)+' kg';";
+  html += "document.getElementById('glpPct').textContent=d.glpPercentual.toFixed(0)+'%';";
+  html += "var b=document.getElementById('barra');";
+  html += "b.style.width=d.glpPercentual.toFixed(0)+'%';";
+  html += "b.style.background=d.glpPercentual<15?'#f44':d.glpPercentual<40?'#fa0':'#0f0';";
+  html += "document.getElementById('pesoKg').textContent=d.pesoKg.toFixed(3)+' kg';";
+  html += "document.getElementById('consumo').textContent=d.consumoKgH.toFixed(3)+' kg/h';";
+  html += "var a=document.getElementById('autonomia');";
+  html += "a.textContent=d.autonomia;";
+  html += "a.style.color=d.autonomiaHoras<0?'#0f0':d.autonomiaHoras<24?'#f44':d.autonomiaHoras<72?'#fa0':'#0f0';";
+  html += "document.getElementById('amostras').textContent=d.numAmostras+' amostras registradas';";
+  html += "document.getElementById('estado').textContent=d.estado;";
+  html += "document.getElementById('uptime').textContent=d.uptime;";
+  html += "}).catch(function(){});}";
+  html += "atualizar();";
+  html += "setInterval(atualizar,2000);";
   html += "</script>";
   html += "</body></html>";
 
@@ -367,6 +403,7 @@ void handleRoot() {
 }
 
 void handleApi() {
+  aplicarParametros();
   String json = "{";
   json += "\"estado\":\"" + nomeEstado(estadoAtual) + "\",";
   json += "\"pesoKg\":" + String(pesoKg, 3) + ",";
@@ -378,6 +415,9 @@ void handleApi() {
   json += "\"numAmostras\":" + String(numAmostras) + ",";
   json += "\"rawHX\":" + String(rawHX, 0) + ",";
   json += "\"offsetEstimado\":" + String(offsetEstimado, 0) + ",";
+  json += "\"cfgPesoVazio\":" + String(cfgPesoVazio, 3) + ",";
+  json += "\"cfgPesoCheio\":" + String(cfgPesoCheio, 3) + ",";
+  json += "\"cfgCapacidade\":" + String(cfgCapacidade, 3) + ",";
   json += "\"uptime\":\"" + tempoUptime() + "\"";
   json += "}";
   server.send(200, "application/json", json);
@@ -438,7 +478,23 @@ void imprimirLeitura() {
 
   Serial.print(" | DP=");
   Serial.print(desvioJanela(), 1);
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(" | IP=");
+    Serial.print(WiFi.localIP());
+  }
+
   Serial.println();
+}
+
+// ─── Task HX711 (core 0) ──────────────────────────────────────────────────────
+void tarefaHX711(void *param) {
+  for (;;) {
+    float val = lerMediaRAW();
+    rawHX_pronto = val;
+    novaLeitura = true;
+    vTaskDelay(pdMS_TO_TICKS(INTERVALO_LEITURA_MS));
+  }
 }
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
@@ -494,6 +550,9 @@ void setup() {
 
   tempoInicio = millis();
   mudarEstado(ESTABILIZACAO);
+
+  // Leitura HX711 no core 0 (loop/web server ficam no core 1)
+  xTaskCreatePinnedToCore(tarefaHX711, "HX711", 4096, NULL, 1, NULL, 0);
 }
 
 // ─── Loop principal ──────────────────────────────────────────────────────────
@@ -501,11 +560,10 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  static unsigned long ultimaLeitura = 0;
-  if (millis() - ultimaLeitura < INTERVALO_LEITURA_MS) return;
-  ultimaLeitura = millis();
+  if (!novaLeitura) return;
+  novaLeitura = false;
 
-  rawHX = lerMediaRAW();
+  rawHX = rawHX_pronto;
   adicionarJanela(rawHX);
 
   switch (estadoAtual) {
